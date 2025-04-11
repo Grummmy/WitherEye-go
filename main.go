@@ -9,9 +9,11 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"os/exec"
 	"regexp"
 	"strings"
 
+	"github.com/rivo/tview"
 	"github.com/tidwall/gjson"
 )
 
@@ -82,9 +84,7 @@ func getFiles(search string, port int) (filenum int64, results []gjson.Result) {
 	if port == -1 {
 		port = 80
 	}
-	// search = fmt.Sprintf("http://localhost:%d?s=%s&j=1&path_column=1",port, url.QueryEscape(search))
-	// fmt.Println(search)
-	// resp, err := http.Get(search)
+
 	resp, err := http.Get(fmt.Sprintf("http://localhost:%d?s=%s&j=1&path_column=1",port, url.QueryEscape(search)))
 	if err != nil {
 		log.Fatal("Getting files error: ", err)
@@ -99,21 +99,36 @@ func getFiles(search string, port int) (filenum int64, results []gjson.Result) {
 	return gjson.Get(string(bodyBytes), "totalResults").Int(), gjson.Get(string(bodyBytes), "results").Array()
 }
 
-func main() {
+func checkConn() int {
+	resp, err := http.Get("http://localhost:80")
+	defer fmt.Print("\033[H\033[2J")
+	if err != nil {
+		fmt.Println("Please, make sure that Everything http-server is running.")
+		fmt.Print("If port is not 80, please, enter it or press enter to try again: ")
+		
+		var port int
+		_, err := fmt.Scanf("%d", &port)
+		if err != nil {
+			fmt.Println("Invalid input.")
+			port = checkConn()
+		}
+
+		return port
+	}
+	defer resp.Body.Close()
+	return -1
+}
+
+func scan(app *tview.Application, list *tview.List, port int) {
 	data := loadData()
 	cheats, islibptn, mcptn := getRegex(data)
-
-	_, err := os.UserHomeDir()
-	if err != nil {
-		log.Fatal(err)
-	}
 
 	l, files := getFiles(fmt.Sprintf(
 		"ext:jar <!path:.fabric !path:.forge path:mod path:%s>|<path:download|path:$Recycle.Bin>",
 		strings.Join(data.MCLaunchers, "|path:"),
-	), -1)
-	fmt.Println("got files: ", l)
-	for _, file := range files {
+	), port)
+
+	for i, file := range files {
 		name := file.Get("name").String()
 		path := file.Get("path").String()
 		pn := path + string(os.PathSeparator) + name
@@ -130,19 +145,33 @@ func main() {
 
 		if match := cheats.FindString(name); match != "" {
 			result := cheats.ReplaceAllStringFunc(pn, func(match string) string {
-				return "\033[1m" + match + "\033[22m"
+				return "[::r]" + match + "[::R]"
 			})
-			if !found {
-				fmt.Printf("\033[33mSuspisious: %s\033[0m\n", result)
-			} else {
-				fmt.Println(result)
-			}
-			fmt.Println(" ┗╸ ", path)
+			color := ""
+			if !found {color = "[yellow]"}
+
+			app.QueueUpdateDraw(func() {
+				list.AddItem(color+result, " ┗╸ "+path, 0, func() {
+					exec.Command("explorer", "/select,", pn).Start()
+				})
+			})
 		}
+		app.QueueUpdateDraw(func() {
+			list.SetTitle(fmt.Sprintf(" %d / %d ", i+1, l))
+		})
+	}	
+}
+
+func main() {
+	port := checkConn()
+
+	list := tview.NewList()
+	app := tview.NewApplication().SetRoot(list, true)
+	list.SetBorder(true).SetTitle(" loading... ").SetTitleAlign(tview.AlignCenter)
+
+	go scan(app, list, port)
+
+	if err := app.Run(); err != nil {
+		panic(err)
 	}
-
-
-	var enter string
-	fmt.Print("Press enter to exit... ")
-	fmt.Scanln(&enter)
 }
